@@ -69,15 +69,21 @@ public:
 class Color1CharacteristicCallbacks : public BLECharacteristicCallbacks {
 public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
-        uint8_t *color = pCharacteristic->getData();
+        uint8_t *data = pCharacteristic->getData();
+
+        int offset = 0;
+        uint16_t red = data[offset] | (data[offset + 1] << 8);
+        offset = 2;
+        uint16_t green = data[offset] | (data[offset + 1] << 8);
+        offset = 4;
+        uint16_t blue = data[offset] | (data[offset + 1] << 8);
 
         Serial.print("Color1 changed: ");
-        Serial.print(color[0]);
-        Serial.print(", ");
-        Serial.print(color[1]);
-        Serial.print(", ");
-        Serial.print(color[2]);
-        Serial.println("");
+        Serial.print(red);
+        Serial.print(" ");
+        Serial.print(green);
+        Serial.print(" ");
+        Serial.println(blue);
 
         pCharacteristic->notify();
     }
@@ -110,6 +116,7 @@ void setup() {
             MODE_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
+            BLECharacteristic::PROPERTY_WRITE_NR |
             BLECharacteristic::PROPERTY_NOTIFY
     );
     modeCharacteristic->addDescriptor(new BLE2902());
@@ -121,12 +128,13 @@ void setup() {
             COLOR1_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
+            BLECharacteristic::PROPERTY_WRITE_NR |
             BLECharacteristic::PROPERTY_NOTIFY
     );
     color1Characteristic->addDescriptor(new BLE2902());
 
-    uint8_t value[] = {1, 2, 3};
-    color1Characteristic->setValue(value, 3);
+    uint16_t value[] = {0, 1023, 0};
+    color1Characteristic->setValue((uint8_t *) value, 6);
 
     color1Characteristic->setCallbacks(new Color1CharacteristicCallbacks());
 
@@ -141,6 +149,7 @@ void setup() {
     server->getAdvertising()->start();
 
     batteryTicker.attach(60, readBattery);
+    readBattery();
 
     Serial.println("Started");
 }

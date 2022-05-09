@@ -69,21 +69,14 @@ public:
 class Color1CharacteristicCallbacks : public BLECharacteristicCallbacks {
 public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
-        uint8_t *data = pCharacteristic->getData();
-
-        int offset = 0;
-        uint16_t red = data[offset] | (data[offset + 1] << 8);
-        offset = 2;
-        uint16_t green = data[offset] | (data[offset + 1] << 8);
-        offset = 4;
-        uint16_t blue = data[offset] | (data[offset + 1] << 8);
+        auto *data = (uint16_t *) pCharacteristic->getData();
 
         Serial.print("Color1 changed: ");
-        Serial.print(red);
+        Serial.print(data[0]);
         Serial.print(" ");
-        Serial.print(green);
+        Serial.print(data[1]);
         Serial.print(" ");
-        Serial.println(blue);
+        Serial.println(data[2]);
 
         pCharacteristic->notify();
     }

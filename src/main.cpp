@@ -242,10 +242,10 @@ void setup() {
 
     BLEDevice::init(DEVICE_NAME);
     // TODO: security
-//    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT);
+    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT);
 //    BLEDevice::setSecurityCallbacks();
-//    BLESecurity *pSecurity = new BLESecurity();
-//    pSecurity->setStaticPIN(123456);
+    BLESecurity *pSecurity = new BLESecurity();
+    pSecurity->setStaticPIN(123456);
 
     server = BLEDevice::createServer();
     server->setCallbacks(new MyServerCallbacks());
@@ -257,6 +257,7 @@ void setup() {
             BLECharacteristic::PROPERTY_NOTIFY
     );
     batteryCharacteristic->addDescriptor(new BLE2902());
+    batteryCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
     batteryService->start();
 
     auto modeService = server->createService(MODE_SERVICE);
@@ -271,6 +272,7 @@ void setup() {
     modeCharacteristic->addDescriptor(new BLE2902());
     modeCharacteristic->setValue(&mode, 1);
     modeCharacteristic->setCallbacks(new ModeCharacteristicCallbacks());
+    modeCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
 
     color1Characteristic = modeService->createCharacteristic(
             COLOR1_CHARACTERISTIC,
@@ -285,6 +287,7 @@ void setup() {
     color1Characteristic->setValue((uint8_t *) value, 6);
 
     color1Characteristic->setCallbacks(new Color1CharacteristicCallbacks());
+    color1Characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
 
     turnOnCharacteristic = modeService->createCharacteristic(
             TURN_ON_CHARACTERISTIC,
@@ -296,6 +299,7 @@ void setup() {
     turnOnCharacteristic->addDescriptor(new BLE2902());
     turnOnCharacteristic->setValue(&turnOn, 1);
     turnOnCharacteristic->setCallbacks(new TurnOnCharacteristicCallbacks());
+    turnOnCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
 
     speedCharacteristic = modeService->createCharacteristic(
             SPEED_CHARACTERISTIC,
@@ -307,6 +311,7 @@ void setup() {
     speedCharacteristic->addDescriptor(new BLE2902());
     speedCharacteristic->setValue(&speed, 1);
     speedCharacteristic->setCallbacks(new SpeedCharacteristicCallbacks());
+    speedCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
 
     modeService->start();
 
@@ -322,6 +327,7 @@ void setup() {
     otaCharacteristic->addDescriptor(new BLE2902());
     otaCharacteristic->setValue(&ota, 1);
     otaCharacteristic->setCallbacks(new OtaCharacteristicCallbacks());
+    otaCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
 
     otaService->start();
 

@@ -57,6 +57,22 @@ uint8_t speed = 100;
 
 uint8_t ota = 0;
 
+uint8_t rainbowIndex = 0;
+const uint16_t rainbowColors[12][3] = {
+        {1023, 0,    0},     // red
+        {1023, 512,  0},   // orange
+        {1023, 1023, 0},  // yellow
+        {512,  1023, 0},   // lime
+        {0,    1023, 0},     // green
+        {0,    1023, 512},   // aqua
+        {0,    1023, 1023},  // cyan
+        {0,    512,  1023},   // sky
+        {0,    0,    1023},     // blue
+        {512,  0,    1023},   // violet
+        {1023, 0,    1023},  // magenta
+        {1023, 0,    512},   // pink
+};
+
 void readBattery() {
     auto batteryLevel = (uint8_t) (analogRead(VOLTAGE_PIN) * 100 / 4095);
     batteryCharacteristic->setValue(&batteryLevel, 1);
@@ -180,7 +196,7 @@ public:
         pCharacteristic->notify();
 
         ota = *data;
-        Serial.print("Ota: ");
+        Serial.print("Ota changed: ");
         Serial.println(ota);
 
         if (ota == 1) {
@@ -297,7 +313,7 @@ void setup() {
     auto otaService = server->createService(OTA_SERVICE);
 
     otaCharacteristic = otaService->createCharacteristic(
-            MODE_CHARACTERISTIC,
+            OTA_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
             BLECharacteristic::PROPERTY_WRITE_NR |
@@ -325,8 +341,75 @@ void setup() {
     Serial.println("BT Started");
 }
 
+unsigned long lastTime = 0;
+
 void loop() {
     if (ota == 1) {
         ArduinoOTA.handle();
+    }
+
+    if (mode == RAINBOW) {
+        const unsigned long time = millis();
+        const uint8_t interval = 255 - speed;
+        const uint16_t fadeAmount = (time - lastTime) / interval;
+
+        if (time - lastTime > interval) {
+            lastTime = time;
+
+            if (red == rainbowColors[rainbowIndex][0] && green == rainbowColors[rainbowIndex][1] &&
+                blue == rainbowColors[rainbowIndex][2]) {
+                rainbowIndex++;
+
+                if (rainbowIndex > 12) {
+                    rainbowIndex = 0;
+                }
+            } else {
+                if (red < rainbowColors[rainbowIndex][0]) {
+                    red += fadeAmount;
+
+                    if (red > rainbowColors[rainbowIndex][0]) {
+                        red = rainbowColors[rainbowIndex][0];
+                    }
+                } else if (red > rainbowColors[rainbowIndex][0]) {
+                    red -= fadeAmount;
+
+                    if (red < rainbowColors[rainbowIndex][0]) {
+                        red = rainbowColors[rainbowIndex][0];
+                    }
+                }
+
+                if (green < rainbowColors[rainbowIndex][1]) {
+                    green += fadeAmount;
+
+                    if (green > rainbowColors[rainbowIndex][1]) {
+                        green = rainbowColors[rainbowIndex][1];
+                    }
+                } else if (green > rainbowColors[rainbowIndex][1]) {
+                    green -= fadeAmount;
+
+                    if (green < rainbowColors[rainbowIndex][1]) {
+                        green = rainbowColors[rainbowIndex][1];
+                    }
+                }
+
+                if (blue < rainbowColors[rainbowIndex][2]) {
+                    blue += fadeAmount;
+
+                    if (blue > rainbowColors[rainbowIndex][2]) {
+                        blue = rainbowColors[rainbowIndex][2];
+                    }
+                } else if (blue > rainbowColors[rainbowIndex][2]) {
+                    blue -= fadeAmount;
+
+                    if (blue < rainbowColors[rainbowIndex][2]) {
+                        blue = rainbowColors[rainbowIndex][2];
+                    }
+                }
+
+                ledcWrite(RED_CHANNEL, red);
+                ledcWrite(GREEN_CHANNEL, green);
+                ledcWrite(BLUE_CHANNEL, blue);
+            }
+        }
     }
 }

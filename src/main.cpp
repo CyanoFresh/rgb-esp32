@@ -5,6 +5,7 @@
 #include <Ticker.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include <Preferences.h>
 
 #define RED_PIN 16
 #define GREEN_PIN 17
@@ -52,9 +53,11 @@ BLECharacteristic *speedCharacteristic = nullptr;
 BLECharacteristic *otaCharacteristic = nullptr;
 
 Ticker batteryTicker;
+Ticker saveTicker;
+Preferences preferences;
 
 uint8_t mode = STATIC;
-int color[] = {MAX_COLOR_VALUE, 0, 0};
+uint16_t color[] = {MAX_COLOR_VALUE, 0, 0};
 uint8_t turnOn = 1;
 uint8_t speed = 100;
 uint8_t ota = 0;
@@ -80,6 +83,17 @@ void setupLed() {
     ledcAttachPin(RED_PIN, RED_CHANNEL);
     ledcAttachPin(GREEN_PIN, GREEN_CHANNEL);
     ledcAttachPin(BLUE_PIN, BLUE_CHANNEL);
+}
+
+void savePreferences() {
+    preferences.putUChar("mode", mode);
+    preferences.putUChar("speed", speed);
+
+    preferences.putUShort("red", color[0]);
+    preferences.putUShort("green", color[1]);
+    preferences.putUShort("blue", color[2]);
+
+    Serial.println("Saved preferences");
 }
 
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -112,10 +126,27 @@ public:
 
         pCharacteristic->notify();
 
+        if (turnOn != 1) {
+            turnOn = 1;
+            turnOnCharacteristic->setValue(&turnOn, 1);
+            turnOnCharacteristic->notify();
+        }
+
+        color1Characteristic->setValue((uint8_t *) color, 6);
+        color1Characteristic->notify();
+
+        if (mode == RAINBOW) {
+            color[0] = MAX_COLOR_VALUE;
+            color[1] = 0;
+            color[2] = 0;
+        }
+
         mode = *data;
 
         Serial.print("Mode changed: ");
         Serial.println(mode);
+
+        saveTicker.once(5, savePreferences);
     }
 };
 
@@ -134,12 +165,20 @@ public:
         ledcWrite(GREEN_CHANNEL, color[1]);
         ledcWrite(BLUE_CHANNEL, color[2]);
 
+        if (turnOn != 1) {
+            turnOn = 1;
+            turnOnCharacteristic->setValue(&turnOn, 1);
+            turnOnCharacteristic->notify();
+        }
+
         Serial.print("Color1 changed: ");
         Serial.print(color[0]);
         Serial.print(" ");
         Serial.print(color[1]);
         Serial.print(" ");
         Serial.println(color[2]);
+
+        saveTicker.once(5, savePreferences);
     }
 };
 
@@ -175,9 +214,17 @@ public:
 
         pCharacteristic->notify();
 
+        if (turnOn != 1) {
+            turnOn = 1;
+            turnOnCharacteristic->setValue(&turnOn, 1);
+            turnOnCharacteristic->notify();
+        }
+
         speed = *data;
         Serial.print("Speed changed: ");
         Serial.println(speed);
+
+        saveTicker.once(5, savePreferences);
     }
 };
 
@@ -230,16 +277,52 @@ public:
     }
 };
 
+void setupPreferences() {
+    preferences.begin("rgb-esp32", false);
+
+    mode = preferences.getUChar("mode", mode);
+    speed = preferences.getUChar("speed", speed);
+
+    Serial.print("Loaded mode: ");
+    Serial.print(mode);
+    Serial.print(", speed: ");
+    Serial.println(speed);
+
+    if (mode == RAINBOW) {
+        color[0] = MAX_COLOR_VALUE;
+        color[1] = 0;
+        color[2] = 0;
+    } else {
+        color[0] = preferences.getUShort("red", color[0]);
+        color[1] = preferences.getUShort("green", color[1]);
+        color[2] = preferences.getUShort("blue", color[2]);
+    }
+
+    ledcWrite(RED_CHANNEL, color[0]);
+    ledcWrite(GREEN_CHANNEL, color[1]);
+    ledcWrite(BLUE_CHANNEL, color[2]);
+
+    Serial.print("Loaded Color1: ");
+    Serial.print(color[0]);
+    Serial.print(" ");
+    Serial.print(color[1]);
+    Serial.print(" ");
+    Serial.println(color[2]);
+}
+
 void setup() {
     Serial.begin(115200);
 
+    setupLed();
+    setupPreferences();
+
     BLEDevice::init(DEVICE_NAME);
-    // TODO: security
-    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
-    auto pSecurity = new BLESecurity();
-    pSecurity->setCapability(ESP_IO_CAP_OUT);
-    pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-    pSecurity->setStaticPIN(123456);
+    // TODO: debug why bonding is not saved
+//    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+//    auto pSecurity = new BLESecurity();
+//    pSecurity->setCapability(ESP_IO_CAP_OUT);
+//    pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
+//    pSecurity->setStaticPIN(123456);
 
     server = BLEDevice::createServer();
     server->setCallbacks(new MyServerCallbacks());
@@ -251,7 +334,7 @@ void setup() {
             BLECharacteristic::PROPERTY_NOTIFY
     );
     batteryCharacteristic->addDescriptor(new BLE2902());
-    batteryCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    batteryCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
     batteryService->start();
 
     auto modeService = server->createService(MODE_SERVICE);
@@ -266,7 +349,7 @@ void setup() {
     modeCharacteristic->addDescriptor(new BLE2902());
     modeCharacteristic->setValue(&mode, 1);
     modeCharacteristic->setCallbacks(new ModeCharacteristicCallbacks());
-    modeCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    modeCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
     color1Characteristic = modeService->createCharacteristic(
             COLOR1_CHARACTERISTIC,
@@ -280,7 +363,7 @@ void setup() {
     color1Characteristic->setValue((uint8_t *) color, 6);
 
     color1Characteristic->setCallbacks(new Color1CharacteristicCallbacks());
-    color1Characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    color1Characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
     turnOnCharacteristic = modeService->createCharacteristic(
             TURN_ON_CHARACTERISTIC,
@@ -292,7 +375,7 @@ void setup() {
     turnOnCharacteristic->addDescriptor(new BLE2902());
     turnOnCharacteristic->setValue(&turnOn, 1);
     turnOnCharacteristic->setCallbacks(new TurnOnCharacteristicCallbacks());
-    turnOnCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    turnOnCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
     speedCharacteristic = modeService->createCharacteristic(
             SPEED_CHARACTERISTIC,
@@ -304,7 +387,7 @@ void setup() {
     speedCharacteristic->addDescriptor(new BLE2902());
     speedCharacteristic->setValue(&speed, 1);
     speedCharacteristic->setCallbacks(new SpeedCharacteristicCallbacks());
-    speedCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    speedCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
     modeService->start();
 
@@ -320,7 +403,7 @@ void setup() {
     otaCharacteristic->addDescriptor(new BLE2902());
     otaCharacteristic->setValue(&ota, 1);
     otaCharacteristic->setCallbacks(new OtaCharacteristicCallbacks());
-    otaCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+//    otaCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
     otaService->start();
 
@@ -333,8 +416,6 @@ void setup() {
 
     batteryTicker.attach(60, readBattery);
     readBattery();
-
-    setupLed();
 
     Serial.println("BT Started");
 }
@@ -352,7 +433,7 @@ void loop() {
 
     if (mode == RAINBOW && turnOn == 1) {
         const unsigned long time = millis();
-        const uint8_t interval = (255 - speed);
+        const uint8_t interval = (255 - speed);     // TODO
 
         if (time - lastTime > interval) {
             lastTime = time;
@@ -360,14 +441,38 @@ void loop() {
             color[currentFadingUp] += fadeAmount;
             color[currentFadingDown] -= fadeAmount;
 
-            if (color[currentFadingUp] > MAX_COLOR_VALUE) {
+            Serial.print("debug color ");
+            Serial.print(color[0]);
+            Serial.print(", ");
+            Serial.print(color[1]);
+            Serial.print(", ");
+            Serial.println(color[2]);
+
+            if (color[currentFadingUp] >= MAX_COLOR_VALUE) {
                 color[currentFadingUp] = MAX_COLOR_VALUE;
-                currentFadingUp = (currentFadingUp + 1) % 3;
+
+                currentFadingUp++;
+
+                if (currentFadingUp > 2) {
+                    currentFadingUp = 0;
+                }
+
+                Serial.print("color[currentFadingUp] >= MAX_COLOR_VALUE, currentFadingUp = ");
+                Serial.println(currentFadingUp);
             }
 
-            if (color[currentFadingDown] < 0) {
+            // uint16 overflow
+            if (color[currentFadingDown] >= MAX_COLOR_VALUE) {
                 color[currentFadingDown] = 0;
-                currentFadingDown = (currentFadingDown + 1) % 3;
+
+                currentFadingDown++;
+
+                if (currentFadingDown > 2) {
+                    currentFadingDown = 0;
+                }
+
+                Serial.print("color[currentFadingDown] >= MAX_COLOR_VALUE, currentFadingDown = ");
+                Serial.println(currentFadingDown);
             }
 
             ledcWrite(RED_CHANNEL, color[0]);

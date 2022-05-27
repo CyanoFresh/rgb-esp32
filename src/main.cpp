@@ -61,6 +61,7 @@ uint16_t color[] = {MAX_COLOR_VALUE, 0, 0};
 uint8_t turnOn = 1;
 uint8_t speed = 100;
 uint8_t ota = 0;
+uint16_t rainbowBrightness = 1023;  // TODO
 
 void readBattery() {
     auto batteryLevel = (uint8_t) map(analogRead(VOLTAGE_PIN), BATTERY_LOW, BATTERY_HIGH, 0, 100);
@@ -76,6 +77,10 @@ void readBattery() {
 }
 
 void setupLed() {
+    pinMode(RED_PIN, OUTPUT);
+    pinMode(GREEN_PIN, OUTPUT);
+    pinMode(BLUE_PIN, OUTPUT);
+
     ledcSetup(RED_CHANNEL, 10000, 10);
     ledcSetup(GREEN_CHANNEL, 10000, 10);
     ledcSetup(BLUE_CHANNEL, 10000, 10);
@@ -94,6 +99,13 @@ void savePreferences() {
     preferences.putUShort("blue", color[2]);
 
     Serial.println("Saved preferences");
+}
+
+void setupBattery() {
+    pinMode(VOLTAGE_PIN, INPUT);
+
+    batteryTicker.attach(60, readBattery);
+    readBattery();
 }
 
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -414,10 +426,9 @@ void setup() {
     server->getAdvertising()->setMinPreferred(0x12);
     server->getAdvertising()->start();
 
-    batteryTicker.attach(60, readBattery);
-    readBattery();
-
     Serial.println("BT Started");
+
+    setupBattery();
 }
 
 unsigned long lastTime = 0;
@@ -441,28 +452,18 @@ void loop() {
             color[currentFadingUp] += fadeAmount;
             color[currentFadingDown] -= fadeAmount;
 
-            Serial.print("debug color ");
-            Serial.print(color[0]);
-            Serial.print(", ");
-            Serial.print(color[1]);
-            Serial.print(", ");
-            Serial.println(color[2]);
-
-            if (color[currentFadingUp] >= MAX_COLOR_VALUE) {
-                color[currentFadingUp] = MAX_COLOR_VALUE;
+            if (color[currentFadingUp] >= rainbowBrightness) {
+                color[currentFadingUp] = rainbowBrightness;
 
                 currentFadingUp++;
 
                 if (currentFadingUp > 2) {
                     currentFadingUp = 0;
                 }
-
-                Serial.print("color[currentFadingUp] >= MAX_COLOR_VALUE, currentFadingUp = ");
-                Serial.println(currentFadingUp);
             }
 
             // uint16 overflow
-            if (color[currentFadingDown] >= MAX_COLOR_VALUE) {
+            if (color[currentFadingDown] >= rainbowBrightness) {
                 color[currentFadingDown] = 0;
 
                 currentFadingDown++;
@@ -470,9 +471,6 @@ void loop() {
                 if (currentFadingDown > 2) {
                     currentFadingDown = 0;
                 }
-
-                Serial.print("color[currentFadingDown] >= MAX_COLOR_VALUE, currentFadingDown = ");
-                Serial.println(currentFadingDown);
             }
 
             ledcWrite(RED_CHANNEL, color[0]);

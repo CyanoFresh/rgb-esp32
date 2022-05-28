@@ -31,10 +31,18 @@
 #define GREEN_CHANNEL 1
 #define BLUE_CHANNEL 2
 
-#define MAX_COLOR_VALUE 1023
+#define MAX_COLOR_VALUE 4095
 
 #define BATTERY_LOW 3000
 #define BATTERY_HIGH 3900
+
+#define BATTERY_LOW 3000
+#define BATTERY_HIGH 3900
+
+#define BATTERY_LOW_TURNED_ON 2800
+#define BATTERY_HIGH_TURNED_ON 3700
+
+#define OTA_PASSWORD "12345678"
 
 typedef enum {
     STATIC,
@@ -42,7 +50,6 @@ typedef enum {
     STROBE,
 } Mode;
 
-BLEServer *server = nullptr;
 BLECharacteristic *batteryCharacteristic = nullptr;
 
 BLECharacteristic *modeCharacteristic = nullptr;
@@ -61,29 +68,16 @@ uint16_t color[] = {MAX_COLOR_VALUE, 0, 0};
 uint8_t turnOn = 1;
 uint8_t speed = 100;
 uint8_t ota = 0;
-uint16_t rainbowBrightness = 1023;  // TODO
-
-void readBattery() {
-    auto batteryLevel = (uint8_t) map(analogRead(VOLTAGE_PIN), BATTERY_LOW, BATTERY_HIGH, 0, 100);
-
-    if (batteryLevel > 100) {
-        batteryLevel = 100;
-    } else if (batteryLevel < 0) {
-        batteryLevel = 0;
-    }
-
-    batteryCharacteristic->setValue(&batteryLevel, 1);
-    batteryCharacteristic->notify();
-}
+uint16_t rainbowBrightness = MAX_COLOR_VALUE;  // TODO
 
 void setupLed() {
     pinMode(RED_PIN, OUTPUT);
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
 
-    ledcSetup(RED_CHANNEL, 10000, 10);
-    ledcSetup(GREEN_CHANNEL, 10000, 10);
-    ledcSetup(BLUE_CHANNEL, 10000, 10);
+    ledcSetup(RED_CHANNEL, 10000, 12);
+    ledcSetup(GREEN_CHANNEL, 10000, 12);
+    ledcSetup(BLUE_CHANNEL, 10000, 12);
 
     ledcAttachPin(RED_PIN, RED_CHANNEL);
     ledcAttachPin(GREEN_PIN, GREEN_CHANNEL);
@@ -98,13 +92,41 @@ void savePreferences() {
     preferences.putUShort("green", color[1]);
     preferences.putUShort("blue", color[2]);
 
-    Serial.println("Saved preferences");
+    Serial.println("Preferences saved");
+}
+
+void readBattery() {
+    uint16_t value = analogRead(VOLTAGE_PIN);
+
+    uint16_t low = BATTERY_LOW_TURNED_ON;
+    uint16_t high = BATTERY_HIGH_TURNED_ON;
+
+    if (turnOn == 0) {
+        low = BATTERY_LOW;
+        high = BATTERY_HIGH;
+    }
+    auto batteryLevel = map(value, low, high, 0, 100);
+
+    if (batteryLevel > 100) {
+        batteryLevel = 100;
+    } else if (batteryLevel < 0) {
+        batteryLevel = 0;
+    }
+
+    batteryCharacteristic->setValue((uint8_t *) batteryLevel, 1);
+    batteryCharacteristic->notify();
+    
+    Serial.print("Battery level: ");
+    Serial.print(batteryLevel);
+    Serial.print("%, ");
+    Serial.println(value);
 }
 
 void setupBattery() {
     pinMode(VOLTAGE_PIN, INPUT);
 
-    batteryTicker.attach(60, readBattery);
+    // TODO: adjust timings
+    batteryTicker.attach(3, readBattery);
     readBattery();
 }
 
@@ -136,16 +158,15 @@ public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
         auto data = pCharacteristic->getData();
 
+        mode = *data;
+
         pCharacteristic->notify();
 
-        if (turnOn != 1) {
+        if (turnOn == 0) {
             turnOn = 1;
             turnOnCharacteristic->setValue(&turnOn, 1);
             turnOnCharacteristic->notify();
         }
-
-        color1Characteristic->setValue((uint8_t *) color, 6);
-        color1Characteristic->notify();
 
         if (mode == RAINBOW) {
             color[0] = MAX_COLOR_VALUE;
@@ -153,7 +174,8 @@ public:
             color[2] = 0;
         }
 
-        mode = *data;
+        color1Characteristic->setValue((uint8_t *) color, 6);
+        color1Characteristic->notify();
 
         Serial.print("Mode changed: ");
         Serial.println(mode);
@@ -199,9 +221,9 @@ public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
         auto data = pCharacteristic->getData();
 
-        pCharacteristic->notify();
-
         turnOn = *data;
+
+        pCharacteristic->notify();
 
         if (turnOn == 1) {
             ledcWrite(RED_CHANNEL, color[0]);
@@ -224,6 +246,8 @@ public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
         auto data = pCharacteristic->getData();
 
+        speed = *data;
+
         pCharacteristic->notify();
 
         if (turnOn != 1) {
@@ -232,7 +256,6 @@ public:
             turnOnCharacteristic->notify();
         }
 
-        speed = *data;
         Serial.print("Speed changed: ");
         Serial.println(speed);
 
@@ -245,15 +268,16 @@ public:
     void onWrite(BLECharacteristic *pCharacteristic) override {
         auto data = pCharacteristic->getData();
 
+        ota = *data;
+
         pCharacteristic->notify();
 
-        ota = *data;
         Serial.print("Ota changed: ");
         Serial.println(ota);
 
         if (ota == 1) {
             WiFi.mode(WIFI_AP);
-            WiFi.softAP(DEVICE_NAME, "12345678");
+            WiFi.softAP(DEVICE_NAME, OTA_PASSWORD);
 
             ArduinoOTA
                     .onStart([]() {
@@ -322,12 +346,7 @@ void setupPreferences() {
     Serial.println(color[2]);
 }
 
-void setup() {
-    Serial.begin(115200);
-
-    setupLed();
-    setupPreferences();
-
+void setupBLE() {
     BLEDevice::init(DEVICE_NAME);
     // TODO: debug why bonding is not saved
 //    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
@@ -336,7 +355,7 @@ void setup() {
 //    pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
 //    pSecurity->setStaticPIN(123456);
 
-    server = BLEDevice::createServer();
+    auto server = BLEDevice::createServer();
     server->setCallbacks(new MyServerCallbacks());
 
     auto batteryService = server->createService(BATTERY_SERVICE);
@@ -427,7 +446,14 @@ void setup() {
     server->getAdvertising()->start();
 
     Serial.println("BT Started");
+}
 
+void setup() {
+    Serial.begin(115200);
+
+    setupLed();
+    setupPreferences();
+    setupBLE();
     setupBattery();
 }
 
@@ -444,7 +470,7 @@ void loop() {
 
     if (mode == RAINBOW && turnOn == 1) {
         const unsigned long time = millis();
-        const uint8_t interval = (255 - speed);     // TODO
+        const uint8_t interval = (255 - speed);     // TODO: find appropriate interval+fadeAmount formula
 
         if (time - lastTime > interval) {
             lastTime = time;
@@ -454,30 +480,20 @@ void loop() {
 
             if (color[currentFadingUp] >= rainbowBrightness) {
                 color[currentFadingUp] = rainbowBrightness;
-
-                currentFadingUp++;
-
-                if (currentFadingUp > 2) {
-                    currentFadingUp = 0;
-                }
+                currentFadingUp = (currentFadingUp + 1) % 3;
             }
 
-            // uint16 overflow
+            // uint16 overflow -> color will be 65535 after 0
             if (color[currentFadingDown] >= rainbowBrightness) {
                 color[currentFadingDown] = 0;
-
-                currentFadingDown++;
-
-                if (currentFadingDown > 2) {
-                    currentFadingDown = 0;
-                }
+                currentFadingDown = (currentFadingDown + 1) % 3;
             }
 
             ledcWrite(RED_CHANNEL, color[0]);
             ledcWrite(GREEN_CHANNEL, color[1]);
             ledcWrite(BLUE_CHANNEL, color[2]);
 
-            Serial.print("Written color ");
+            Serial.print("Rainbow color ");
             Serial.print(color[0]);
             Serial.print(", ");
             Serial.print(color[1]);

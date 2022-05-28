@@ -96,6 +96,7 @@ void savePreferences() {
 }
 
 void readBattery() {
+    // TODO: jumping values
     uint16_t value = analogRead(VOLTAGE_PIN);
 
     uint16_t low = BATTERY_LOW_TURNED_ON;
@@ -105,6 +106,7 @@ void readBattery() {
         low = BATTERY_LOW;
         high = BATTERY_HIGH;
     }
+
     auto batteryLevel = map(value, low, high, 0, 100);
 
     if (batteryLevel > 100) {
@@ -113,7 +115,9 @@ void readBattery() {
         batteryLevel = 0;
     }
 
-    batteryCharacteristic->setValue((uint8_t *) batteryLevel, 1);
+    uint8_t percent = batteryLevel;
+
+    batteryCharacteristic->setValue(&percent, 1);
     batteryCharacteristic->notify();
     
     Serial.print("Battery level: ");

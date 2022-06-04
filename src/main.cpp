@@ -18,8 +18,10 @@ BLECharacteristic *batteryCharacteristic = nullptr;
 
 BLECharacteristic *modeCharacteristic = nullptr;
 BLECharacteristic *color1Characteristic = nullptr;
+BLECharacteristic *color2Characteristic = nullptr;
 BLECharacteristic *turnOnCharacteristic = nullptr;
 BLECharacteristic *speedCharacteristic = nullptr;
+BLECharacteristic *rainbowBrightnessCharacteristic = nullptr;
 
 BLECharacteristic *otaCharacteristic = nullptr;
 
@@ -29,10 +31,16 @@ Preferences preferences;
 
 uint8_t mode = STATIC;
 uint16_t color[] = {MAX_COLOR_VALUE, 0, 0};
+uint16_t color2[] = {0, 0, 0};
 uint8_t turnOn = 1;
 uint8_t speed = 100;
 uint8_t ota = 0;
-uint16_t rainbowBrightness = MAX_COLOR_VALUE;  // TODO
+uint8_t batteryLevel = 0;
+uint8_t rainbowBrightness = 255;
+
+uint8_t currentFadingUp = 1;
+uint8_t currentFadingDown = 0;
+uint16_t maxRainbowColor = rainbowBrightness * MAX_COLOR_VALUE / 255;
 
 void setupLed() {
     pinMode(RED_PIN, OUTPUT);
@@ -51,10 +59,15 @@ void setupLed() {
 void savePreferences() {
     preferences.putUChar("mode", mode);
     preferences.putUChar("speed", speed);
+    preferences.putUChar("brightness", rainbowBrightness);
 
     preferences.putUShort("red", color[0]);
     preferences.putUShort("green", color[1]);
     preferences.putUShort("blue", color[2]);
+
+    preferences.putUShort("red2", color2[0]);
+    preferences.putUShort("green2", color2[1]);
+    preferences.putUShort("blue2", color2[2]);
 
     Serial.println("Preferences saved");
 }
@@ -62,44 +75,41 @@ void savePreferences() {
 uint8_t reading = 0;
 uint sum = 0;
 
-void readBattery() {
+void readBattery(bool useMedian = false) {
     uint16_t value = analogRead(VOLTAGE_PIN);
 
     sum += value;
     reading++;
 
-    if (reading >= 10) {
-        value = sum / reading;
+    if (useMedian) {
+        if (reading >= 10) {
+            value = sum / reading;
 
-        reading = 0;
-        sum = 0;
-    } else {
-        return;
+            reading = 0;
+            sum = 0;
+        } else {
+            return;
+        }
     }
 
-    uint16_t low = BATTERY_LOW_TURNED_ON;
-    uint16_t high = BATTERY_HIGH_TURNED_ON;
+    auto battery = map(value, BATTERY_LOW, BATTERY_HIGH, 0, 100);
 
-    if (turnOn == 0) {
-        low = BATTERY_LOW;
-        high = BATTERY_HIGH;
+    if (battery > 100) {
+        battery = 100;
+    } else if (battery < 0) {
+        battery = 0;
     }
 
-    auto batteryLevel = map(value, low, high, 0, 100);
+    uint8_t percent = battery;
 
-    if (batteryLevel > 100) {
-        batteryLevel = 100;
-    } else if (batteryLevel < 0) {
-        batteryLevel = 0;
+    if (batteryLevel != percent) {
+        batteryLevel = percent;
+        batteryCharacteristic->setValue(&batteryLevel, 1);
+        batteryCharacteristic->notify();
     }
-
-    uint8_t percent = batteryLevel;
-
-    batteryCharacteristic->setValue(&percent, 1);
-    batteryCharacteristic->notify();
 
     Serial.print("Battery level: ");
-    Serial.print(batteryLevel);
+    Serial.print(battery);
     Serial.print("%, ");
     Serial.println(value);
 }
@@ -107,7 +117,7 @@ void readBattery() {
 void setupBattery() {
     pinMode(VOLTAGE_PIN, INPUT);
 
-    batteryTicker.attach_ms(2000, readBattery);
+    batteryTicker.attach_ms(2000, readBattery, true);
     readBattery();
 }
 
@@ -153,6 +163,9 @@ public:
             color[0] = MAX_COLOR_VALUE;
             color[1] = 0;
             color[2] = 0;
+
+            currentFadingUp = 1;
+            currentFadingDown = 0;
         }
 
         color1Characteristic->setValue((uint8_t *) color, 6);
@@ -192,6 +205,34 @@ public:
         Serial.print(color[1]);
         Serial.print(" ");
         Serial.println(color[2]);
+
+        saveTicker.once(5, savePreferences);
+    }
+};
+
+class Color2CharacteristicCallbacks : public BLECharacteristicCallbacks {
+public:
+    void onWrite(BLECharacteristic *pCharacteristic) override {
+        auto data = (uint16_t *) pCharacteristic->getData();
+
+        pCharacteristic->notify();
+
+        color2[0] = data[0];
+        color2[1] = data[1];
+        color2[2] = data[2];
+
+        if (turnOn != 1) {
+            turnOn = 1;
+            turnOnCharacteristic->setValue(&turnOn, 1);
+            turnOnCharacteristic->notify();
+        }
+
+        Serial.print("Color2 changed: ");
+        Serial.print(color2[0]);
+        Serial.print(" ");
+        Serial.print(color2[1]);
+        Serial.print(" ");
+        Serial.println(color2[2]);
 
         saveTicker.once(5, savePreferences);
     }
@@ -239,6 +280,33 @@ public:
 
         Serial.print("Speed changed: ");
         Serial.println(speed);
+
+        saveTicker.once(5, savePreferences);
+    }
+};
+
+class RainbowBrightnessCharacteristicCallbacks : public BLECharacteristicCallbacks {
+public:
+    void onWrite(BLECharacteristic *pCharacteristic) override {
+        auto data = pCharacteristic->getData();
+
+        rainbowBrightness = *data;
+
+        pCharacteristic->notify();
+
+        maxRainbowColor = rainbowBrightness * MAX_COLOR_VALUE / 255;
+
+        if (turnOn != 1) {
+            turnOn = 1;
+            turnOnCharacteristic->setValue(&turnOn, 1);
+            turnOnCharacteristic->notify();
+        }
+
+        Serial.print("Rainbow brightness changed: ");
+        Serial.print(rainbowBrightness);
+        Serial.print(" (");
+        Serial.print(maxRainbowColor);
+        Serial.println(")");
 
         saveTicker.once(5, savePreferences);
     }
@@ -299,11 +367,15 @@ void setupPreferences() {
 
     mode = preferences.getUChar("mode", mode);
     speed = preferences.getUChar("speed", speed);
+    rainbowBrightness = preferences.getUChar("brightness", rainbowBrightness);
 
     Serial.print("Loaded mode: ");
     Serial.print(mode);
     Serial.print(", speed: ");
-    Serial.println(speed);
+    Serial.print(speed);
+    Serial.print(", rainbowBrightness: ");
+    Serial.print(rainbowBrightness);
+    Serial.println();
 
     if (mode == RAINBOW) {
         color[0] = MAX_COLOR_VALUE;
@@ -315,6 +387,10 @@ void setupPreferences() {
         color[2] = preferences.getUShort("blue", color[2]);
     }
 
+    color2[0] = preferences.getUShort("red2", color2[0]);
+    color2[1] = preferences.getUShort("green2", color2[1]);
+    color2[2] = preferences.getUShort("blue2", color2[2]);
+
     ledcWrite(RED_CHANNEL, color[0]);
     ledcWrite(GREEN_CHANNEL, color[1]);
     ledcWrite(BLUE_CHANNEL, color[2]);
@@ -325,6 +401,13 @@ void setupPreferences() {
     Serial.print(color[1]);
     Serial.print(" ");
     Serial.println(color[2]);
+
+    Serial.print("Loaded Color2: ");
+    Serial.print(color2[0]);
+    Serial.print(" ");
+    Serial.print(color2[1]);
+    Serial.print(" ");
+    Serial.println(color2[2]);
 }
 
 void setupBLE() {
@@ -346,12 +429,13 @@ void setupBLE() {
             BLECharacteristic::PROPERTY_NOTIFY
     );
     batteryCharacteristic->addDescriptor(new BLE2902());
+    batteryCharacteristic->setValue(&batteryLevel, 1);
 //    batteryCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
     batteryService->start();
 
-    auto modeService = server->createService(MODE_SERVICE);
+    auto mainService = server->createService(BLEUUID(MAIN_SERVICE), 30);
 
-    modeCharacteristic = modeService->createCharacteristic(
+    modeCharacteristic = mainService->createCharacteristic(
             MODE_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
@@ -363,7 +447,7 @@ void setupBLE() {
     modeCharacteristic->setCallbacks(new ModeCharacteristicCallbacks());
 //    modeCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
-    color1Characteristic = modeService->createCharacteristic(
+    color1Characteristic = mainService->createCharacteristic(
             COLOR1_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
@@ -371,13 +455,23 @@ void setupBLE() {
             BLECharacteristic::PROPERTY_NOTIFY
     );
     color1Characteristic->addDescriptor(new BLE2902());
-
     color1Characteristic->setValue((uint8_t *) color, 6);
-
     color1Characteristic->setCallbacks(new Color1CharacteristicCallbacks());
 //    color1Characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
-    turnOnCharacteristic = modeService->createCharacteristic(
+    color2Characteristic = mainService->createCharacteristic(
+            COLOR2_CHARACTERISTIC,
+            BLECharacteristic::PROPERTY_READ |
+            BLECharacteristic::PROPERTY_WRITE |
+            BLECharacteristic::PROPERTY_WRITE_NR |
+            BLECharacteristic::PROPERTY_NOTIFY
+    );
+    color2Characteristic->addDescriptor(new BLE2902());
+    color2Characteristic->setValue((uint8_t *) color2, 6);
+    color2Characteristic->setCallbacks(new Color2CharacteristicCallbacks());
+//    color1Characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+
+    turnOnCharacteristic = mainService->createCharacteristic(
             TURN_ON_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
@@ -389,7 +483,7 @@ void setupBLE() {
     turnOnCharacteristic->setCallbacks(new TurnOnCharacteristicCallbacks());
 //    turnOnCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
-    speedCharacteristic = modeService->createCharacteristic(
+    speedCharacteristic = mainService->createCharacteristic(
             SPEED_CHARACTERISTIC,
             BLECharacteristic::PROPERTY_READ |
             BLECharacteristic::PROPERTY_WRITE |
@@ -401,7 +495,19 @@ void setupBLE() {
     speedCharacteristic->setCallbacks(new SpeedCharacteristicCallbacks());
 //    speedCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
 
-    modeService->start();
+    rainbowBrightnessCharacteristic = mainService->createCharacteristic(
+            RAINBOW_BRIGHTNESS_CHARACTERISTIC,
+            BLECharacteristic::PROPERTY_READ |
+            BLECharacteristic::PROPERTY_WRITE |
+            BLECharacteristic::PROPERTY_WRITE_NR |
+            BLECharacteristic::PROPERTY_NOTIFY
+    );
+    rainbowBrightnessCharacteristic->addDescriptor(new BLE2902());
+    rainbowBrightnessCharacteristic->setValue(&rainbowBrightness, 1);
+    rainbowBrightnessCharacteristic->setCallbacks(new RainbowBrightnessCharacteristicCallbacks());
+//    speedCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM);
+
+    mainService->start();
 
     auto otaService = server->createService(OTA_SERVICE);
 
@@ -419,7 +525,7 @@ void setupBLE() {
 
     otaService->start();
 
-    server->getAdvertising()->addServiceUUID(MODE_SERVICE);
+    server->getAdvertising()->addServiceUUID(MAIN_SERVICE);
     server->getAdvertising()->setAppearance(0x03C0);
     server->getAdvertising()->setScanResponse(true);
     server->getAdvertising()->setMinPreferred(0x06);  // functions that help with iPhone connections issue ?
@@ -441,45 +547,75 @@ void setup() {
 unsigned long lastTime = 0;
 
 const uint8_t fadeAmount = 5;
-uint8_t currentFadingUp = 1;
-uint8_t currentFadingDown = 0;
+
+uint8_t strobeCurrentColor = 0;
 
 void loop() {
     if (ota == 1) {
         ArduinoOTA.handle();
     }
 
-    if (mode == RAINBOW && turnOn == 1) {
-        const unsigned long time = millis();
-        const uint8_t interval = (255 - speed);     // TODO: find appropriate interval+fadeAmount formula
+    if (turnOn == 1) {
+        if (mode == RAINBOW) {
+            const unsigned long time = millis();
+            const uint8_t interval = (255 - speed);     // TODO: find appropriate interval+fadeAmount formula
 
-        if (time - lastTime > interval) {
-            lastTime = time;
+            if (time - lastTime > interval) {
+                lastTime = time;
 
-            color[currentFadingUp] += fadeAmount;
-            color[currentFadingDown] -= fadeAmount;
+                color[currentFadingUp] += fadeAmount;
+                color[currentFadingDown] -= fadeAmount;
 
-            if (color[currentFadingUp] >= rainbowBrightness) {
-                color[currentFadingUp] = rainbowBrightness;
-                currentFadingUp = (currentFadingUp + 1) % 3;
+                if (color[currentFadingUp] >= MAX_COLOR_VALUE) {
+                    color[currentFadingUp] = MAX_COLOR_VALUE;
+                    currentFadingUp = (currentFadingUp + 1) % 3;
+                }
+
+                // uint16 overflow -> color will be 65535 after 0
+                if (color[currentFadingDown] >= MAX_COLOR_VALUE) {
+                    color[currentFadingDown] = 0;
+                    currentFadingDown = (currentFadingDown + 1) % 3;
+                }
+
+                ledcWrite(RED_CHANNEL, color[0] * rainbowBrightness / 255);
+                ledcWrite(GREEN_CHANNEL, color[1] * rainbowBrightness / 255);
+                ledcWrite(BLUE_CHANNEL, color[2] * rainbowBrightness / 255 );
+
+                Serial.print("Rainbow color ");
+                Serial.print(color[0]);
+                Serial.print(", ");
+                Serial.print(color[1]);
+                Serial.print(", ");
+                Serial.print(color[2]);
+                Serial.print("; up: ");
+                Serial.print(currentFadingUp);
+                Serial.print("; down: ");
+                Serial.print(currentFadingDown);
+                Serial.println();
             }
+        } else if (mode == STROBE) {
+            const unsigned long time = millis();
 
-            // uint16 overflow -> color will be 65535 after 0
-            if (color[currentFadingDown] >= rainbowBrightness) {
-                color[currentFadingDown] = 0;
-                currentFadingDown = (currentFadingDown + 1) % 3;
+            if (time - lastTime >= map(speed, 0, 255, 0, 2000)) {
+                lastTime = time;
+
+                if (strobeCurrentColor == 0) {
+                    ledcWrite(RED_CHANNEL, color[0]);
+                    ledcWrite(GREEN_CHANNEL, color[1]);
+                    ledcWrite(BLUE_CHANNEL, color[2]);
+
+                    strobeCurrentColor = 1;
+                } else {
+                    ledcWrite(RED_CHANNEL, color2[0]);
+                    ledcWrite(GREEN_CHANNEL, color2[1]);
+                    ledcWrite(BLUE_CHANNEL, color2[2]);
+
+                    strobeCurrentColor = 0;
+                }
+
+                Serial.print("Strobe color ");
+                Serial.println(strobeCurrentColor);
             }
-
-            ledcWrite(RED_CHANNEL, color[0]);
-            ledcWrite(GREEN_CHANNEL, color[1]);
-            ledcWrite(BLUE_CHANNEL, color[2]);
-
-            Serial.print("Rainbow color ");
-            Serial.print(color[0]);
-            Serial.print(", ");
-            Serial.print(color[1]);
-            Serial.print(", ");
-            Serial.println(color[2]);
         }
     }
 }
